@@ -23,19 +23,18 @@ from mconfig import (
 # 新增：随机延迟函数
 async def random_delay():
     """生成随机延迟时间（3-10秒）"""
-    delay = random.uniform(3, 10)
+    delay = random.uniform(30, 100)
     print(f"等待 {delay:.2f} 秒...")
     await asyncio.sleep(delay)
 
 async def monitor_single_token(session, token_config, webhook_url, use_proxy, proxy_url):
     """监控单个token的节点状态"""
     try:
-        # 添加随机延迟
         await random_delay()
         
         current_state = await fetch_nodes_data(
             session=session,
-            api_url=API_URL,  # 使用共用的API_URL
+            api_url=API_URL,
             api_token=token_config['token']
         )
         
@@ -43,16 +42,11 @@ async def monitor_single_token(session, token_config, webhook_url, use_proxy, pr
             print(f"\n=== 检查Token: {token_config['name']} ===")
             previous = token_config.get('previous_state', {})
             
-            if previous:
-                changes = compare_states(previous, current_state)
-                if changes or ALWAYS_NOTIFY:
-                    message = build_message(changes) if changes else build_status_message(current_state)
-                    if message:
-                        # 在消息前添加token标识
-                        message = f"【{token_config['name']}】\n{message}"
-                        await send_message_async(webhook_url, message, use_proxy, proxy_url)
-            else:
-                message = build_status_message(current_state)
+            # 检查是否有离线节点
+            offline_nodes = [node for node in current_state if not node['isConnected']]
+            
+            if offline_nodes or ALWAYS_NOTIFY:  # 有离线节点或启用了始终通知
+                message = build_offline_status_message(current_state, offline_nodes) if offline_nodes else build_status_message(current_state)
                 if message:
                     message = f"【{token_config['name']}】\n{message}"
                     await send_message_async(webhook_url, message, use_proxy, proxy_url)
@@ -247,6 +241,39 @@ async def monitor_nodes(interval, webhook_url, use_proxy, proxy_url, always_noti
             
         await asyncio.sleep(interval)
 
+def build_offline_status_message(current_state, offline_nodes):
+    """构建离线节点状态消息"""
+    adjusted_time = datetime.now() + timedelta(hours=TIME_OFFSET)
+    timestamp = adjusted_time.strftime('%Y-%m-%d %H:%M:%S')
+    
+    total_nodes = len(current_state)
+    online_nodes = total_nodes - len(offline_nodes)
+    total_reward = sum(node['totalReward'] for node in current_state)
+    total_today_reward = sum(node['todayReward'] for node in current_state)
+    
+    message_lines = [
+        "⚠️ 【节点离线警告】⚠️",
+        f"时间: {timestamp}\n",
+        f"📊 节点统计:",
+        f"  • 节点总数: {total_nodes}",
+        f"  • 在线节点: {online_nodes}",
+        f"  • 离线节点: {len(offline_nodes)}",
+        f"\n💰 奖励统计:",
+        f"  • 总奖励: {total_reward}",
+        f"  • 今日奖励: {total_today_reward}",
+        f"\n❌ 离线节点详情:"
+    ]
+    
+    for node in offline_nodes:
+        # 获取pubKey的最后6位
+        pub_key_short = node['pubKey'][-6:]
+        message_lines.extend([
+            f"  • 节点: ...{pub_key_short}",
+            f"    奖励: {node['totalReward']} / 今日: {node['todayReward']}"
+        ])
+    
+    return "\n".join(message_lines)
+
 def build_status_message(current_state):
     """构建状态消息"""
     adjusted_time = datetime.now() + timedelta(hours=TIME_OFFSET)
@@ -257,22 +284,24 @@ def build_status_message(current_state):
     online_nodes = sum(1 for node in current_state if node['isConnected'])
     
     message_lines = [
-        "【节点状态报告】",
+        "📊 【节点状态报告】",
         f"时间: {timestamp}\n",
-        f"节点总数: {len(current_state)}",
-        f"在线节点: {online_nodes}",
-        f"总奖励: {total_reward}",
-        f"今日奖励: {total_today_reward}\n",
-        "节点详情:"
+        f"📈 节点统计:",
+        f"  • 节点总数: {len(current_state)}",
+        f"  • 在线节点: {online_nodes}",
+        f"\n💰 奖励统计:",
+        f"  • 总奖励: {total_reward}",
+        f"  • 今日奖励: {total_today_reward}",
+        f"\n📝 节点详情:"
     ]
     
     for node in current_state:
-        message_lines.append(
-            f"- {node['pubKey'][:20]}... "
-            f"{'在线' if node['isConnected'] else '离线'} "
-            f"总奖励:{node['totalReward']} "
-            f"今日奖励:{node['todayReward']}"
-        )
+        status_emoji = "✅" if node['isConnected'] else "❌"
+        pub_key_short = node['pubKey'][-6:]
+        message_lines.extend([
+            f"  • 节点: ...{pub_key_short} {status_emoji}",
+            f"    奖励: {node['totalReward']} / 今日: {node['todayReward']}"
+        ])
     
     return "\n".join(message_lines)
 
