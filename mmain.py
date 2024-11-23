@@ -17,7 +17,8 @@ from mconfig import (
     USE_PROXY, 
     INTERVAL, 
     TIME_OFFSET,
-    ALWAYS_NOTIFY
+    ALWAYS_NOTIFY,
+    SHOW_DETAIL  # 新增这一行
 )
 
 # 新增：随机延迟函数
@@ -45,11 +46,15 @@ async def monitor_single_token(session, token_config, webhook_url, use_proxy, pr
             # 检查是否有离线节点
             offline_nodes = [node for node in current_state if not node['isConnected']]
             
-            if offline_nodes or ALWAYS_NOTIFY:  # 有离线节点或启用了始终通知
-                message = build_offline_status_message(current_state, offline_nodes) if offline_nodes else build_status_message(current_state)
-                if message:
-                    message = f"【{token_config['name']}】\n{message}"
-                    await send_message_async(webhook_url, message, use_proxy, proxy_url)
+            # 构建消息并发送
+            if offline_nodes:  # 有离线节点时发送离线警告
+                message = build_offline_status_message(current_state, offline_nodes)
+            else:  # 所有节点在线时发送正常状态报告
+                message = build_status_message(current_state, SHOW_DETAIL)
+                
+            if message:
+                message = f"【{token_config['name']}】\n{message}"
+                await send_message_async(webhook_url, message, use_proxy, proxy_url)
             
             token_config['previous_state'] = copy.deepcopy(current_state)
             
@@ -274,7 +279,7 @@ def build_offline_status_message(current_state, offline_nodes):
     
     return "\n".join(message_lines)
 
-def build_status_message(current_state):
+def build_status_message(current_state, show_detail=False):  # 修改函数签名
     """构建状态消息"""
     adjusted_time = datetime.now() + timedelta(hours=TIME_OFFSET)
     timestamp = adjusted_time.strftime('%Y-%m-%d %H:%M:%S')
@@ -291,17 +296,21 @@ def build_status_message(current_state):
         f"  • 在线节点: {online_nodes}",
         f"\n💰 奖励统计:",
         f"  • 总奖励: {total_reward}",
-        f"  • 今日奖励: {total_today_reward}",
-        f"\n📝 节点详情:"
+        f"  • 今日奖励: {total_today_reward}"
     ]
     
-    for node in current_state:
-        status_emoji = "✅" if node['isConnected'] else "❌"
-        pub_key_short = node['pubKey'][-6:]
+    # 只在show_detail为True时添加节点详情
+    if show_detail:
         message_lines.extend([
-            f"  • 节点: ...{pub_key_short} {status_emoji}",
-            f"    奖励: {node['totalReward']} / 今日: {node['todayReward']}"
+            f"\n📝 节点详情:"
         ])
+        for node in current_state:
+            status_emoji = "✅" if node['isConnected'] else "❌"
+            pub_key_short = node['pubKey'][-6:]
+            message_lines.extend([
+                f"  • 节点: ...{pub_key_short} {status_emoji}",
+                f"    奖励: {node['totalReward']} / 今日: {node['todayReward']}"
+            ])
     
     return "\n".join(message_lines)
 
